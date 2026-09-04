@@ -4,9 +4,24 @@ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/X11")
 
 add_custom_command(
         OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/ks_tables.h"
-        COMMAND "/usr/bin/gcc" "-o" "${CMAKE_CURRENT_BINARY_DIR}/makekeys" "${CMAKE_CURRENT_SOURCE_DIR}/libx11/src/util/makekeys.c" "&&"
-            "${CMAKE_CURRENT_BINARY_DIR}/makekeys" "keysymdef.h" "XF86keysym.h" "Sunkeysym.h" "DECkeysym.h" "HPkeysym.h" ">" "${CMAKE_CURRENT_BINARY_DIR}/ks_tables.h"
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/xorgproto/include/X11"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}"
+        # VERBATIM 已经负责给每个参数加引号，这里不能再手写 "..."，
+        # 否则引号会变成 -D 值的一部分，路径失效。
+        COMMAND "${CMAKE_COMMAND}"
+                -Dtina_output=${CMAKE_CURRENT_BINARY_DIR}/ks_tables.h
+                -Dtina_compiler=${TINA_HOST_C_COMPILER}
+                -Dtina_source=${CMAKE_CURRENT_SOURCE_DIR}/libx11/src/util/makekeys.c
+                -Dtina_headers_dir=${CMAKE_CURRENT_SOURCE_DIR}/xorgproto/include/X11
+                -Dtina_binary_dir=${CMAKE_CURRENT_BINARY_DIR}
+                -Dtina_host_tool_path=${TINA_HOST_TOOL_PATH}
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/generate-ks-tables.cmake"
+        DEPENDS
+                "${CMAKE_CURRENT_SOURCE_DIR}/libx11/src/util/makekeys.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/xorgproto/include/X11/keysymdef.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/xorgproto/include/X11/XF86keysym.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/xorgproto/include/X11/Sunkeysym.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/xorgproto/include/X11/DECkeysym.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/xorgproto/include/X11/HPkeysym.h"
         COMMENT "Generating source code (ks_tables.h)"
         VERBATIM)
 
@@ -52,6 +67,25 @@ add_library(xkbcomp STATIC
         "xkbcomp/xkbscan.c"
         "${CMAKE_CURRENT_BINARY_DIR}/ks_tables.h"
         "${CMAKE_CURRENT_BINARY_DIR}/xkbparse.c")
+# TinaIDE 本地改动：Windows / macOS 宿主的文件系统大小写不敏感。
+# 本 target 按上游要求把 libx11/include/X11 直接放进搜索路径（KeyBind.c 等用的是
+# 裸 include，如 <XKBlib.h>、<Xresource.h>），于是 bionic 头文件里的
+# `#include <xlocale.h>` 会命中 libX11 的 Xlocale.h。后者只 include <locale.h>，
+# 从不声明 locale_t，而它的 include guard 又已置位，导致 locale.h 二次 include 被跳过，
+# 最终报 "unknown type name 'locale_t'"。
+# 这里在更靠前的位置放一个同名 shim，把请求转回 sysroot 里真正的 xlocale.h。
+# Linux 宿主大小写敏感，不会发生该冲突，因此不需要 shim。
+set(xlocale_shim_dir "${CMAKE_CURRENT_BINARY_DIR}/xlocale-shim")
+if (CMAKE_HOST_WIN32 OR CMAKE_HOST_APPLE)
+    if (NOT EXISTS "${CMAKE_SYSROOT}/usr/include/xlocale.h")
+        message(FATAL_ERROR
+                "Expected NDK sysroot header not found: ${CMAKE_SYSROOT}/usr/include/xlocale.h")
+    endif()
+    file(WRITE "${xlocale_shim_dir}/xlocale.h"
+            "#pragma once\n#include \"${CMAKE_SYSROOT}/usr/include/xlocale.h\"\n")
+    target_include_directories(xkbcomp BEFORE PRIVATE "${xlocale_shim_dir}")
+endif()
+
 target_include_directories(xkbcomp
         PUBLIC
         "libxkbfile/include"
