@@ -573,7 +573,17 @@ static jobject getLogcatOutput(JNIEnv *env, __unused jobject cls) {
 }
 
 void lorieListenForKnocks(void) {
-    struct sockaddr_in address = { .sin_family = AF_INET, .sin_port = htons(PORT), .sin_addr = { .s_addr = INADDR_ANY } };
+    // TinaIDE local change: bind to loopback instead of INADDR_ANY.
+    //
+    // Upstream binds every interface, which on a phone with the INTERNET permission means
+    // any host on the same Wi-Fi can reach this port. The handler only compares the payload
+    // against a fixed MAGIC string and, on a match, triggers a broadcast - so it is not a
+    // remote code path, but it still leaks "this device runs an X server" to network scans
+    // and lets outsiders spam the broadcast.
+    //
+    // Loopback is sufficient: the only legitimate knocker is requestConnection() in
+    // activity.cpp, which hardcodes a connect() to 127.0.0.1.
+    struct sockaddr_in address = { .sin_family = AF_INET, .sin_port = htons(PORT), .sin_addr = { .s_addr = htonl(INADDR_LOOPBACK) } };
     int fd, reuse = 1;
 
     // Even in the case if it will fail for some reason everything will work fine

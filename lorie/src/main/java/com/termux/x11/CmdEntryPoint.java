@@ -53,6 +53,39 @@ public class CmdEntryPoint extends ICmdEntryInterface.Stub {
             System.exit(1);
     }
 
+    /**
+     * TinaIDE local change: entry point for starting the X server from inside a regular
+     * APK process instead of via {@code app_process}.
+     *
+     * {@link #main} cannot be reused here. It calls {@link #initEntryPoint()}, which
+     * reflects into ActivityThread to fabricate a Context and then dlopens libXlorie.so by
+     * absolute path - both only make sense under {@code app_process}. In an APK process a real
+     * Context already exists and the library is resolvable by soname.
+     *
+     * {@code main} also calls {@link Looper#loop()}, which would never return.
+     *
+     * @param args X server arguments, excluding argv[0]
+     * @return true if the X server thread started
+     */
+    public static boolean startEmbedded(Context context, String[] args) {
+        ctx = context;
+        // JNI_OnLoad is the only registrar for this class' native methods, and it runs when
+        // libXlorie.so is loaded. When the X server is started from a service before any
+        // LorieView is inflated, that static initializer has not run yet, so start() would
+        // throw UnsatisfiedLinkError. System.loadLibrary is idempotent.
+        System.loadLibrary("Xlorie");
+        android.util.Log.i("CmdEntryPoint", "starting embedded, commit " + BuildConfig.COMMIT);
+        // The native start() registers a global ref to this instance and reads sendBroadcast /
+        // sendBroadcastDelayed off it, so the instance must outlive this call. It is retained
+        // by that global ref for the lifetime of the process.
+        CmdEntryPoint entryPoint = new CmdEntryPoint();
+        return entryPoint.start(args);
+    }
+
+    /** Used only by {@link #startEmbedded}; the X server is started explicitly there. */
+    private CmdEntryPoint() {
+    }
+
     @SuppressLint({"WrongConstant", "PrivateApi"})
     private Intent createIntent() {
         // We should not care about multiple instances, it should be called only by `Termux:X11` app
