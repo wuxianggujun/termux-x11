@@ -46,12 +46,27 @@ val termuxX11Commit: String = runCatching {
 // 与 tina.android.library 约定插件保持一致的 ABI 收敛策略：
 // 本地默认单 ABI，否则整套 X.Org 会按 4 个 ABI 各编译一遍。
 val nativeAbis: Set<String> = run {
-    val allAbi = providers.gradleProperty("tina.allAbi").orNull?.toBoolean() == true ||
-        System.getenv("CI").equals("true", ignoreCase = true)
+    val allAbiProperty = providers.gradleProperty("tina.allAbi").orNull?.trim()
+    val allAbi = when {
+        allAbiProperty != null -> allAbiProperty.equals("true", ignoreCase = true)
+        System.getenv("CI").equals("true", ignoreCase = true) -> true
+        else -> generateSequence(gradle) { it.parent }
+            .flatMap { it.startParameter.taskNames.asSequence() }
+            .any { it.contains("AllAbi", ignoreCase = true) }
+    }
     if (allAbi) {
         setOf("arm64-v8a", "x86_64")
     } else {
-        when (providers.gradleProperty("tina.devAbi").orNull?.trim()) {
+        val injectedDevAbi = providers.gradleProperty("android.injected.build.abi").orNull
+            ?.split(',')
+            ?.firstNotNullOfOrNull { abi ->
+                when {
+                    abi.trim().startsWith("x86_64") -> "x86_64"
+                    abi.trim().startsWith("arm64") || abi.trim().startsWith("aarch64") -> "arm64"
+                    else -> null
+                }
+            }
+        when (injectedDevAbi ?: providers.gradleProperty("tina.devAbi").orNull?.trim()) {
             "x86_64" -> setOf("x86_64")
             else -> setOf("arm64-v8a")
         }
